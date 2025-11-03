@@ -44,16 +44,6 @@ def arrangement(input, residual, weight, output, eps,
 
 
 def application(input, residual, weight, output, eps):
-    '''
-    input: (N)
-    residual: (N)
-    weight: (N)
-    output: (N)
-    do
-    input = residual + input
-    residual = input
-    output = input / rsqrt(input**2/n + eps) * weight
-    '''
     input = ntl.cast(input, ntl.float32) + ntl.cast(residual, ntl.float32)
 
     residual = input

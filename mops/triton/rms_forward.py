@@ -9,11 +9,6 @@ def _rms_forward_kernel(x_base, w_base, o_base, x_stride, o_stride,
                  eps: tl.constexpr,
                  BLOCK_SIZE: tl.constexpr
                  ):
-    '''
-    x: [m, n]
-    w: [n,]
-    o: [m, n]
-    '''
     row_idx = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
     x = tl.load(x_base + row_idx * x_stride + col_offsets)

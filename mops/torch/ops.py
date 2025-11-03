@@ -28,3 +28,16 @@ def add_rms_forward(x: torch.Tensor,
         x.mul_(torch.rsqrt(var + eps))
         x = x.to(orig_dtype).mul_(weight)
         return x, residual
+
+@register_torch_op
+def siluAndMul(x: torch.Tensor, y: torch.Tensor):
+        return torch.nn.functional.silu(x) * y
+
+
+@register_torch_op
+def sampler_forward(logits: torch.Tensor, temperatures: torch.Tensor):
+        logits = logits.float().div_(temperatures.unsqueeze(dim=1))
+        probs = torch.softmax(logits, dim=-1)
+        # sample_tokens = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)).argmax(dim=-1)
+        sample_tokens = torch.argmax(probs, dim=-1)
+        return sample_tokens

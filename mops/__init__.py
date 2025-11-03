@@ -15,4 +15,5 @@ linear = get_op("linear")
 rms_forward = get_op("rms_forward")
 add_rms_forward = get_op("add_rms_forward")
 softmax = get_op("softmax")
-
+siluAndMul = get_op("siluAndMul")
+sampler_forward = get_op("sampler_forward")

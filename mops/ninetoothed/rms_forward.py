@@ -40,12 +40,6 @@ def arrangement(input, weight, output, eps,
 
 
 def application(input, weight, output, eps):
-    '''
-    input: (1, N)
-    weight: (1, N)
-    do
-    input = input / rsqrt(input**2/n + eps) * weight
-    '''
     
     input_square = ntl.cast(input, ntl.float32) * ntl.cast(input, ntl.float32)
     input_square_mean = ntl.sum(input_square) / input.shape[-1]

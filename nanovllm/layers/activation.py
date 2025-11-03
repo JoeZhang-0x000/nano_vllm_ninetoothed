@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-# from mops import silu
+from mops import siluAndMul
 
 
 class SiluAndMul(nn.Module):
@@ -13,5 +13,4 @@ class SiluAndMul(nn.Module):
     @torch.compile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, y = x.chunk(2, -1)
-        return F.silu(x) * y
-
+        return siluAndMul(x, y)
