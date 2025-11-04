@@ -1,4 +1,4 @@
-from .registry import register_ninetoothed_op
+from mops.ninetoothed.registry import register_ninetoothed_op
 from ninetoothed import Tensor, make, Symbol, block_size
 import ninetoothed.language as ntl
 import torch

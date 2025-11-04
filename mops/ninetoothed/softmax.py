@@ -1,7 +1,7 @@
 from ninetoothed import Tensor, make, Symbol
 import ninetoothed.language as ntl
 import torch
-from .registry import register_ninetoothed_op
+from mops.ninetoothed.registry import register_ninetoothed_op
 
 BLOCK_SIZE = Symbol("BLOCK_SIZE", constexpr=True)
 
@@ -36,5 +36,3 @@ def softmax(x):
     out = torch.empty_like(x)
     kernel(x, out, BLOCK_SIZE=out.shape[1])
     return out
-
-    

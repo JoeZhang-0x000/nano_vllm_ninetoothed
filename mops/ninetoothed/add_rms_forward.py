@@ -3,7 +3,7 @@ import ninetoothed.language as ntl
 import torch
 from mops.ninetoothed.config import *
 from functools import lru_cache
-from .registry import register_ninetoothed_op
+from mops.ninetoothed.registry import register_ninetoothed_op
 
 BLOCK_SIZE = Symbol("BLOCK_SIZE", constexpr=True)
 
@@ -68,4 +68,3 @@ def add_rms_forward(input, residual, weight, eps, inplace=False):
          output = torch.empty_like(input)
     premake(ndim)(input, residual, weight, output, eps, BLOCK_SIZE=input.shape[-1])
     return output, residual
-

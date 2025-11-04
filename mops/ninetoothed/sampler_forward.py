@@ -3,7 +3,7 @@ import ninetoothed.language as ntl
 import torch
 from mops.ninetoothed.config import *
 from functools import lru_cache
-from .registry import register_ninetoothed_op
+from mops.ninetoothed.registry import register_ninetoothed_op
 
 BLOCK_SIZE = Symbol("BLOCK_SIZE", constexpr=True)
 
@@ -20,22 +20,9 @@ def arrangement(logits, temperatures, output, H=BLOCK_SIZE):
     logits_arranged = logits.tile((1, H))
     temperatures_arranged = temperatures.expand((-1, H)).tile((1, H))
 
-    # temperatures_arranged = temperatures.tile((1, H))
-    # temperatures_arranged.dtype = temperatures_arranged.dtype.expand((-1, H))
     output_arranged = output.tile((1, H))
 
-    subs = {
-        logits: Tensor(shape=(2, 3)),
-        temperatures: Tensor(shape=(2, 1)),
-        output: Tensor(shape=(2, 1)),
-        H: 3
-    }
 
-    print('logits \n', logits_arranged.eval(subs))
-    print('temperatures \n', temperatures_arranged.eval(subs))
-    print('outputk \n', output_arranged.eval(subs))
-
-    exit(0)
     return logits_arranged, temperatures_arranged, output_arranged
 
 
@@ -63,5 +50,3 @@ def sampler_forward(logits: torch.Tensor, temperatures: torch.Tensor):
     output = torch.empty((B, 1), dtype=torch.int32, device=logits.device)
     kernel(logits, temperatures.view(-1, 1), output, BLOCK_SIZE=H)
     return output.ravel()
-
-    

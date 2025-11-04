@@ -1,18 +1,7 @@
 from functools import lru_cache
 import torch
 from torch import nn
-
-
-def apply_rotary_emb(
-    x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-) -> torch.Tensor:
-    x1, x2 = torch.chunk(x.float(), 2, dim=-1)
-    y1 = x1 * cos - x2 * sin
-    y2 = x2 * cos + x1 * sin
-    return torch.cat((y1, y2), dim=-1).to(x.dtype)
-
+from mops import apply_rotary_emb
 
 class RotaryEmbedding(nn.Module):
 
@@ -34,7 +23,7 @@ class RotaryEmbedding(nn.Module):
         cache = torch.cat((cos, sin), dim=-1).unsqueeze_(1)
         self.register_buffer("cos_sin_cache", cache, persistent=False)
 
-    @torch.compile
+    #@torch.compile
     def forward(
         self,
         positions: torch.Tensor,

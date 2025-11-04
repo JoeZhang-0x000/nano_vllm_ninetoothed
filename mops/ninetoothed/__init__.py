@@ -4,3 +4,4 @@ from . import rms_forward
 from . import softmax  
 from . import activation
 from . import sampler_forward
+from . import rotary_emb

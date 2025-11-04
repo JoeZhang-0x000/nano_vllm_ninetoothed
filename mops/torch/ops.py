@@ -41,3 +41,14 @@ def sampler_forward(logits: torch.Tensor, temperatures: torch.Tensor):
         # sample_tokens = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)).argmax(dim=-1)
         sample_tokens = torch.argmax(probs, dim=-1)
         return sample_tokens
+
+@register_torch_op
+def apply_rotary_emb(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> torch.Tensor:
+        x1, x2 = torch.chunk(x.float(), 2, dim=-1)
+        y1 = x1 * cos - x2 * sin
+        y2 = x2 * cos + x1 * sin
+        return torch.cat((y1, y2), dim=-1).to(x.dtype)

@@ -5,7 +5,7 @@ import torch
 import math
 from icecream import ic
 from mops.ninetoothed.config import MAX_NUM_CONFIG
-from .registry import register_ninetoothed_op
+from mops.ninetoothed.registry import register_ninetoothed_op
 
 
 BLOCK_SIZE_M = block_size()
