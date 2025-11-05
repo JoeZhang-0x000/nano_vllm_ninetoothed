@@ -2,15 +2,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
-import mops
+from mops import linear
 
 def divide(numerator, denominator):
     assert numerator % denominator == 0
     return numerator // denominator
 
 
-
-linear = mops.linear
 
 
 class LinearBase(nn.Module):

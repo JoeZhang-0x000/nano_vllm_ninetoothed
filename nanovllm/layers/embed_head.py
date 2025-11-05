@@ -5,6 +5,9 @@ import torch.distributed as dist
 
 from nanovllm.utils.context import get_context
 
+from mops import embedding
+from mops import linear
+
 
 class VocabParallelEmbedding(nn.Module):
 
@@ -35,7 +38,7 @@ class VocabParallelEmbedding(nn.Module):
         if self.tp_size > 1:
             mask = (x >= self.vocab_start_idx) & (x < self.vocab_end_idx)
             x = mask * (x - self.vocab_start_idx)
-        y = F.embedding(x, self.weight)
+        y = embedding(x, self.weight)
         if self.tp_size > 1:
             y = mask.unsqueeze(1) * y
             dist.all_reduce(y)
@@ -58,7 +61,7 @@ class ParallelLMHead(VocabParallelEmbedding):
         if context.is_prefill:
             last_indices = context.cu_seqlens_q[1:] - 1
             x = x[last_indices].contiguous()
-        logits = F.linear(x, self.weight)
+        logits = linear(x, self.weight)
         if self.tp_size > 1:
             all_logits = [torch.empty_like(logits) for _ in range(self.tp_size)] if self.tp_rank == 0 else None
             dist.gather(logits, all_logits, 0)

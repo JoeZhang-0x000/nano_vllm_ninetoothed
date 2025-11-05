@@ -36,17 +36,6 @@ def arrangement(x, cos, sin, BLOCK_SIZE=BLOCK_SIZE):
     cos_arranged = _squeeze(cos_arranged)
     sin_arranged = _squeeze(sin_arranged)
 
-    subs = {
-        x: Tensor(shape=(2, 2, 4)),
-        BLOCK_SIZE: 2,
-        cos: Tensor(shape=(2, 1, 2))
-    }
-    print(x_arranged.eval(subs).shape)
-    print(cos_arranged.eval(subs).shape)
-    print(x_arranged.eval(subs))
-    print(cos_arranged.eval(subs))
-    # exit(0)
-
     return x_arranged, cos_arranged, sin_arranged
 
 def application(x, cos, sin):

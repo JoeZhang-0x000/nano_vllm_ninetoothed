@@ -1,5 +1,5 @@
 import torch
-from .registry import register_torch_op
+from mops.torch.registry import register_torch_op
 
 
 @register_torch_op
@@ -52,3 +52,14 @@ def apply_rotary_emb(
         y1 = x1 * cos - x2 * sin
         y2 = x2 * cos + x1 * sin
         return torch.cat((y1, y2), dim=-1).to(x.dtype)
+
+
+@register_torch_op
+def embedding(x: torch.Tensor, weight: torch.Tensor):
+        return torch.nn.functional.embedding(x, weight)
+
+
+@register_torch_op
+def store_kvcache(*args, **kwargs):
+        from mops.triton.attention import store_kvcache
+        return store_kvcache(*args, **kwargs) 
