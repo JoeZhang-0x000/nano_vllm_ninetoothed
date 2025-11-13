@@ -63,3 +63,18 @@ def embedding(x: torch.Tensor, weight: torch.Tensor):
 def store_kvcache(*args, **kwargs):
         from mops.triton.attention import store_kvcache
         return store_kvcache(*args, **kwargs) 
+
+
+
+
+
+
+import flash_attn
+
+@register_torch_op
+def flash_attn_varlen_func(*args, **kwargs):
+        return flash_attn.flash_attn_varlen_func(*args, **kwargs)
+
+@register_torch_op
+def flash_attn_with_kvcache(*args, **kwargs):
+        return flash_attn.flash_attn_with_kvcache(*args, **kwargs)
