@@ -13,8 +13,8 @@ def arrangement(key, value, k_cache, v_cache, slot_mapping):
     k_cache/v_cache: (E, H)
     slot_mapping: (M,)
     ->
-    key/value: (M, 1)x(H,)
-    k_cache/v_cache: (M, 1)x(E, H)
+    key/value: (M,)x(H,)
+    k_cache/v_cache: (M,)x(E, H)
     slot_mapping: (M,)x(1,)
     '''
     M = key.shape[0]
@@ -22,14 +22,21 @@ def arrangement(key, value, k_cache, v_cache, slot_mapping):
     E = k_cache.shape[0]
 
     def _kv_aranged(x):
-        # (M, H)->(M, 1)x(1, H)
-        x_arranged = x.tile((1, H))
+        # (M, H)->(M, 1)x(1, H)->(M, )x(H, )
+        x_arranged = x.tile((1, H)).squeeze((1, ))
+        x_arranged.dtype = x_arranged.dtype.squeeze((0, ))
         return x_arranged
 
-
+    # (M,)(E,)(H,)
     def _cache_arranged(x):
-        # (E, H)->(1, 1)x(E, H)->(M, 1)x(E, H)
-        x_arranged = x.tile((-1, -1)).expand((key_arranged.shape[0], -1))
+        x_arranged = (
+            x # (E, H)
+            .tile((1, -1)) # (E, 1)x(1, H)
+            .squeeze((1,)) # (E, )x(1, H)
+            .tile((-1,)) # (1,)x(E,)x(1, H)
+            .expand((M,)) # (M,)x(E,)x(1,H)
+        )
+        x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze((0,)) # (M,)x(E,)x(H,)
         return x_arranged
 
     key_arranged = _kv_aranged(key)
@@ -45,24 +52,16 @@ def arrangement(key, value, k_cache, v_cache, slot_mapping):
 # 没有stride导致的？？？ 乱码
 def application(key, value, k_cache, v_cache, slot_mapping):
     '''
-    key/vale: (1, H)
-    cache: (E, H)
+    key/vale: (H,)
+    cache: (E,)x(H,)
     slot: (1,)
     '''
     slot = slot_mapping
     k = key
     v = value
-    offs_h = key.offsets(-1)
-    cache_offsets = slot[:, None] * k_cache.shape[1] + offs_h[None, :]
-    ntl.store(
-        k_cache.data_ptr() + cache_offsets, k,
-        mask=offs_h[None, :] < key.shape[1]
-    )
 
-    ntl.store(
-        v_cache.data_ptr() + cache_offsets, v,
-        mask=offs_h[None, :] < value.shape[1]
-    )
+    k_cache[slot] = k[None, :]
+    v_cache[slot] = v[None, :]
 
 
 
@@ -93,13 +92,14 @@ def premake():
     return kernel
 
 def appaly(key, value, k_cache, v_cache, slot_mapping):
+    # print(key.shape, k_cache.shape)
     N, num_heads, head_dim = key.shape
     D = num_heads * head_dim
     assert key.stride(-1) == 1 and value.stride(-1) == 1
     assert key.stride(1) == head_dim and value.stride(1) == head_dim
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == N
-    premake()(key, value, k_cache, v_cache, slot_mapping)
+    premake()(key.view(-1, D), value.view(-1, D), k_cache.view(-1, D), v_cache.view(-1, D), slot_mapping)
 
 
 @register_ninetoothed_op
