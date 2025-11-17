@@ -65,10 +65,6 @@ def store_kvcache(*args, **kwargs):
         return store_kvcache(*args, **kwargs) 
 
 
-
-
-
-
 import flash_attn
 
 @register_torch_op
@@ -78,3 +74,52 @@ def flash_attn_varlen_func(*args, **kwargs):
 @register_torch_op
 def flash_attn_with_kvcache(*args, **kwargs):
         return flash_attn.flash_attn_with_kvcache(*args, **kwargs)
+
+# @register_torch_op
+# def flash_attn_with_kvcache(q, k_cache, v_cache, cache_seqlens, block_table, softmax_scale, causal):
+#         '''
+#         q: b 1 hq d
+#         '''
+#         o = torch.empty_like(q)
+#         for b in range(q.shape[0]):
+#                 k = torch.empty((1,
+#                         cache_seqlens[b],
+#                         k_cache.shape[2],
+#                         q.shape[3],),
+#                         device=q.device, dtype=q.dtype)
+#                 v = torch.empty((
+#                         1,
+#                         cache_seqlens[b],
+#                         v_cache.shape[2],
+#                         q.shape[3],),
+#                         device=q.device, dtype=q.dtype)
+#                 BLOCK_SIZE = k_cache.shape[1]
+#                 for i in range(cache_seqlens[b]):
+#                         k[0, i, ...] = k_cache[block_table[b, i // BLOCK_SIZE], i % BLOCK_SIZE, ...]
+#                         v[0, i, ...] = v_cache[block_table[b, i // BLOCK_SIZE], i % BLOCK_SIZE, ...]
+#                 # b s h d
+#                 q_b = q[[b]]
+                
+#                 # gqa
+#                 hq = q_b.shape[2]
+#                 hk = k.shape[2]
+#                 rep = hq // hk
+#                 k = (k # b s h d
+#                 .unsqueeze(-2) # b s h 1 d
+#                 .expand((-1, -1, -1, rep, -1)) # b s h rep d
+#                 .reshape(k.shape[0], k.shape[1], hq, k.shape[-1]) # b s hq d
+#                 )
+#                 v = (v # b s h d
+#                 .unsqueeze(-2) # b s h 1 d
+#                 .expand((-1, -1, -1, rep, -1)) # b s h rep d
+#                 .reshape(k.shape[0], k.shape[1], hq, k.shape[-1]) # b s hq d
+#                 )
+
+#                 # b h s d
+#                 q_b = q_b.permute(0, 2, 1, 3)
+#                 k_b = k.permute(0, 2, 1, 3)
+#                 v_b = v.permute(0, 2, 1, 3)
+#                 # b s h d
+#                 o_b = torch.nn.functional.scaled_dot_product_attention(q_b, k_b, v_b, scale=softmax_scale, is_causal=False).permute(0, 2, 1, 3)
+#                 o[[b]] = o_b
+#         return o

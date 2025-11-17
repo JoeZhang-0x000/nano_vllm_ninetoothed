@@ -60,8 +60,8 @@ def application(key, value, k_cache, v_cache, slot_mapping):
     k = key
     v = value
 
-    k_cache[slot] = k[None, :]
-    v_cache[slot] = v[None, :]
+    k_cache[slot] = k
+    v_cache[slot] = v
 
 
 

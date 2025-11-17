@@ -40,18 +40,6 @@ def arrangement(logits, temperatures, softmax_output, output):
     # (B,) -> (B, )x(1, )
     output_arranged = output.tile((1,))
 
-    # subs = {
-    #     logits: Tensor(shape=(3, 4)),
-    #     temperatures: Tensor(shape=(3, )),
-    #     output: Tensor(shape=(3,)),
-    #     BLOCK_SIZE: 2
-    # }
-
-    # print(logits_arranged.eval(subs))
-    # print(temperatures_arranged.eval(subs))
-    # print(output_arranged.eval(subs))
-
-
     return logits_arranged, temperatures_arranged, softmax_arranged, output_arranged
 
 
