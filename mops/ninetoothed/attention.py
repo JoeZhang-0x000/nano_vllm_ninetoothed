@@ -3,11 +3,22 @@ import ninetoothed.language as ntl
 import torch
 import functools
 from mops.ninetoothed.registry import register_ninetoothed_op
+from mops.ninetoothed.config import MAX_NUM_CONFIG, STATIC_MODE, MAX_NUM_STAGES
 import math
 
 
 class _VarLen:
-    def _arrangement(q, k, v, o, sm_scale, is_causal):
+
+    if STATIC_MODE:
+        BLOCK_SIZE_M = 64
+        BLOCK_SIZE_N = 32
+    else:
+        BLOCK_SIZE_M = ninetoothed.block_size()
+        BLOCK_SIZE_N = ninetoothed.block_size()
+
+    def _arrangement(
+        q, k, v, o, sm_scale, is_causal, BLOCK_SIZE_M=None, BLOCK_SIZE_N=None
+    ):
         """
         qo: b s hq d
         kv: b s hk d
@@ -15,8 +26,12 @@ class _VarLen:
         qo: b hq s_bm 1         | bm d
         kv: b hq s_bm 1 | s_bn  | bn d
         """
-        BLOCK_SIZE_M = ninetoothed.Symbol("BLOCK_SIZE_M", constexpr=True)
-        BLOCK_SIZE_N = ninetoothed.Symbol("BLOCK_SIZE_N", constexpr=True)
+        # BLOCK_SIZE_M = ninetoothed.Symbol("BLOCK_SIZE_M", constexpr=True)
+        # BLOCK_SIZE_N = ninetoothed.Symbol("BLOCK_SIZE_N", constexpr=True)
+        if BLOCK_SIZE_M is None:
+            BLOCK_SIZE_M = _VarLen.BLOCK_SIZE_M
+        if BLOCK_SIZE_N is None:
+            BLOCK_SIZE_N = _VarLen.BLOCK_SIZE_N
 
         def _arrange_qo(x):
             x_arranged = x.permute((0, 2, 1, 3)).tile(  # b s h d  # b h s d
@@ -97,7 +112,13 @@ class _VarLen:
             ninetoothed.Tensor(0),
             ninetoothed.Tensor(0),
         )
-        kernel = ninetoothed.make(_VarLen._arrangement, _VarLen._application, tensors)
+        kernel = ninetoothed.make(
+            _VarLen._arrangement,
+            _VarLen._application,
+            tensors,
+            max_num_configs=MAX_NUM_CONFIG,
+            num_stages=MAX_NUM_STAGES,
+        )
         return kernel
 
     def apply(q, k, v, sm_scale=None, is_causal=True):
@@ -119,16 +140,7 @@ class _VarLen:
             .reshape(k.shape[0], k.shape[1], hq, k.shape[-1])  # b s hq d
         )
         sm_scale = 1 / math.sqrt(q.shape[-1]) if sm_scale is None else sm_scale
-        _VarLen._premake()(
-            q,
-            k,
-            v,
-            o,
-            sm_scale,
-            is_causal,
-            BLOCK_SIZE_M=16,
-            BLOCK_SIZE_N=16,
-        )
+        _VarLen._premake()(q, k, v, o, sm_scale, is_causal)
         return o._values
 
 
@@ -175,15 +187,21 @@ class KvCache:
         o_arranged = _arrange_qo(o)
 
         def _arrange_cache(x):
-            x_arranged = (x # N B h d
-            .permute((0, 2, 1, 3)) # N h B d
-            .tile((1, 1, -1, -1)) # N h 1 1 | 1 1 B d
-            .tile((-1, 1, 1, 1)) # 1 h 1 1 | N 1 1 1 | 1 1 B d
-            .permute((0, 2, 1, 3)) # 1 1 h 1 | N 1 1 1 | 1 1 B d
-            .expand((q_arranged.shape[0], -1, -1, -1)) # b 1 h 1 | N 1 1 1 | 1 1 B d
+            x_arranged = (
+                x.permute((0, 2, 1, 3))  # N B h d  # N h B d
+                .tile((1, 1, -1, -1))  # N h 1 1 | 1 1 B d
+                .tile((-1, 1, 1, 1))  # 1 h 1 1 | N 1 1 1 | 1 1 B d
+                .permute((0, 2, 1, 3))  # 1 1 h 1 | N 1 1 1 | 1 1 B d
+                .expand(
+                    (q_arranged.shape[0], -1, -1, -1)
+                )  # b 1 h 1 | N 1 1 1 | 1 1 B d
             )
-            x_arranged.dtype = x_arranged.dtype.squeeze((1, 2, 3)) # b 1 h 1 | N | 1 1 B d
-            x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze((0, 1)) # b 1 h 1 | N | B d
+            x_arranged.dtype = x_arranged.dtype.squeeze(
+                (1, 2, 3)
+            )  # b 1 h 1 | N | 1 1 B d
+            x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze(
+                (0, 1)
+            )  # b 1 h 1 | N | B d
             return x_arranged
 
         k_cache_arranged = _arrange_cache(k_cache)
@@ -232,7 +250,7 @@ class KvCache:
         m_i = ntl.full((1,), float("-inf"), dtype=ntl.float32)
         l_i = ntl.full((1,), float(0), dtype=ntl.float32)
         o_i = ntl.zeros(q.shape, dtype=ntl.float32)
-        
+
         # ntl.device_print("k_j_shape_0 %d", k_cache[0].shape[0])
         # ntl.device_print("k_j_shape_1 %d", k_cache[0].shape[1])
         block_nums = block_table.shape[0]
@@ -273,13 +291,17 @@ class KvCache:
     def _premake():
         tensors = (
             # q
-            ninetoothed.Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
+            ninetoothed.Tensor(
+                4, shape_options=(None, None, None, {"constexpr": True})
+            ),
             # k cache
             ninetoothed.Tensor(4, shape_options={"constexpr": True}),
             # v cache
             ninetoothed.Tensor(4, shape_options={"constexpr": True}),
             # o
-            ninetoothed.Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
+            ninetoothed.Tensor(
+                4, shape_options=(None, None, None, {"constexpr": True})
+            ),
             # cache_seqlens
             ninetoothed.Tensor(
                 4,
@@ -293,7 +315,7 @@ class KvCache:
             # is_causal
             ninetoothed.Tensor(0),
         )
-        kernel = ninetoothed.make(KvCache._arrangement, KvCache._application, tensors)
+        kernel = ninetoothed.make(KvCache._arrangement, KvCache._application, tensors, num_stages=MAX_NUM_STAGES)
         return kernel
 
     def apply(
@@ -303,16 +325,14 @@ class KvCache:
         o = torch.empty_like(q)
         rep = q.shape[2] // k_cache.shape[2]
         k_cache = (
-            k_cache # N B hk d
-            .unsqueeze(3) # N B hk 1 d
-            .expand((-1, -1, -1, rep, -1)).
-            reshape(k_cache.shape[0], k_cache.shape[1], -1, k_cache.shape[-1])
+            k_cache.unsqueeze(3)  # N B hk d  # N B hk 1 d
+            .expand((-1, -1, -1, rep, -1))
+            .reshape(k_cache.shape[0], k_cache.shape[1], -1, k_cache.shape[-1])
         )
         v_cache = (
-            v_cache # N B hk d
-            .unsqueeze(3) # N B hk 1 d
-            .expand((-1, -1, -1, rep, -1)).
-            reshape(k_cache.shape[0], k_cache.shape[1], -1, k_cache.shape[-1])
+            v_cache.unsqueeze(3)  # N B hk d  # N B hk 1 d
+            .expand((-1, -1, -1, rep, -1))
+            .reshape(k_cache.shape[0], k_cache.shape[1], -1, k_cache.shape[-1])
         )
         KvCache._premake()(
             q,
@@ -325,6 +345,7 @@ class KvCache:
             is_causal,
         )
         return o
+
 
 @register_ninetoothed_op
 def flash_attn_with_kvcache(

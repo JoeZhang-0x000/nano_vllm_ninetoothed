@@ -49,7 +49,7 @@ def arrangement(key, value, k_cache, v_cache, slot_mapping):
 
     return key_arranged, value_arranged, k_cache_arranged, v_cache_arranged, slot_mapping_arranged
 
-# 没有stride导致的？？？ 乱码
+
 def application(key, value, k_cache, v_cache, slot_mapping):
     '''
     key/vale: (H,)

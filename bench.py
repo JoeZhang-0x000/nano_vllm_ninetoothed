@@ -18,8 +18,6 @@ def main():
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]
     # uncomment the following line for vllm
     # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
-    # warmup
-    llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
     
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()
