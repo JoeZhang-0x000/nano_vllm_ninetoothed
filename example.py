@@ -12,6 +12,7 @@ def main():
     prompts = [
         "introduce yourself",
         "list all prime numbers within 100",
+        "NineToothed is a Triton-based domain-specific language (DSL).",
         "白日依山尽",
     ]
     prompts = [

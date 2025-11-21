@@ -147,7 +147,22 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, so
 
 
 
+@triton.jit
+def _flash_attn_with_kvcache_main_kernel(
+    Q, K, V, O,
+    cu_seqlens_q, cu_seqlens_k,
+    stride_qt, stride_qh, stride_qd,
+    stride_kt, stride_kh, stride_kd,
+    stride_vt, stride_vh, stride_vd,
+    stride_ot, stride_oh, stride_od,
+    sm_scale,
+    D_HEAD: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    IS_CAUSAL: tl.constexpr
+):
+    pass
 
 
-
-
+@register_triton_op
+def flash_attn_with_kvcache(q, k_cache, v_cache, cache_seqlens, block_table,softmax_scale=None, causal=True):
+    o = torch.empty_like(q)
