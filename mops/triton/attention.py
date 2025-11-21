@@ -103,7 +103,7 @@ def _flash_varlen_main_kernel(
 
 
 @register_triton_op
-def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, causal=True, **kwargs):
+def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, softmax_scale=None, causal=True, **kwargs):
     '''
     layout: thd
     '''
@@ -130,15 +130,24 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, ca
         head_q
     )
 
+    softmax_scale = 1 / math.sqrt(head_dim) if softmax_scale is None else softmax_scale
+
     o = torch.empty_like(q)
     _flash_varlen_main_kernel[grid](
         q, k, v, o,
         cu_seqlens_q, cu_seqlens_k,
         *strides(q), *strides(k), *strides(v), *strides(o),
-        1 / math.sqrt(head_dim),
+        softmax_scale,
         head_dim,
         BLOCK_SIZE_M, BLOCK_SIZE_N,
         causal
     )
 
     return o
+
+
+
+
+
+
+

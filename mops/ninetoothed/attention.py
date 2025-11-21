@@ -1,121 +1,120 @@
-from ninetoothed import Tensor, Symbol, make
+from ninetoothed import Tensor, Symbol, make, block_size
 import ninetoothed.language as ntl
 import torch
 from functools import lru_cache
 from mops.ninetoothed.registry import register_ninetoothed_op
+import math
 
 
-# def arrangement(q, k, v, o, sm_scale):
-#     '''
-#     qo: B N SQ D
-#     kv: B N SK D
-#     ->
-#     qo: (B, N, 1, 1)x(1, 1, SQ_BM, 1)x(1, 1, BM, D)
-#     kv: (B, N, 1, 1)x(1, 1, SK_BN, 1)x(1, 1, BN, D)
-#     '''
-#     BLOCK_SIZE_M = Symbol("BLOCK_SIZE_M", constexpr=True)
-#     BLOCK_SIZE_N = Symbol("BLOCK_SIZE_N", constexpr=True)
-#     BLOCK_SIZE_D = q.shape[-1]
-    
-#     def _arrange_qo(x):
-#         # (B, N, SQ, D)->(B, N, SQ//BM, 1)x(1, 1, BM, D)
-#         x_arranged = x.tile((1, 1, BLOCK_SIZE_M, BLOCK_SIZE_D))
-#         # ->(B, N, 1, 1)x(1, 1, SQ//BM, 1)x(1, 1, BM, D)
-#         x_arranged = x_arranged.tile((1, 1, -1, -1))
-#         # ->(B, N, 1, 1)x(SQ//BM,)x(1, 1, BM, D)
-#         x_arranged.dtype = x_arranged.dtype.squeeze((0, 1, 3))
-#         # ->(B, N, 1, 1)x(SQ//BM,)x(BM, D)
-#         x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze((0, 1))
+BLOCK_SIZE_M = block_size()
+BLOCK_SIZE_N = block_size()
 
-#         return x_arranged
+def arrangement(
+    q, k, v, scale, o, BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N
+):
+    def arrange_q_or_o(input):
+        arranged = input.tile((1, 1, BLOCK_SIZE_M, -1))
+        arranged.dtype = arranged.dtype.squeeze((0, 1))
 
-#     def _arrange_kv(x):
-#         # (B, N, SK, D)->(B, N, SK//BN, 1)x(1, 1, BN, D)
-#         x_arranged = x.tile((1, 1, BLOCK_SIZE_N, BLOCK_SIZE_D))
-#         # ->(B, N, 1, 1)x(1, 1, SK//BN, 1)x(1, 1, BN, D)
-#         x_arranged = x_arranged.tile((1, 1, -1, -1))
-#         # ->(B, N, 1, 1)x(SK//BN,)x(1, 1, BN, D)
-#         x_arranged.dtype = x_arranged.dtype.squeeze((0, 1, 3))
-#         # ->(B, N, 1, 1)x(SK//BN,)x(BN, D)
-#         x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze((0, 1))
+        return arranged
 
-#         return x_arranged
+    def arrange_k_or_v(input):
+        arranged = input.tile((1, 1, BLOCK_SIZE_N, -1))
+        arranged = arranged.tile((1, 1, -1, -1))
+        arranged = arranged.expand((-1, -1, q_arranged.shape[-2], -1))
+        arranged.dtype = arranged.dtype.squeeze((0, 1, 3))
+        arranged.dtype.dtype = arranged.dtype.dtype.squeeze((0, 1))
 
-#     q_arranged = _arrange_qo(q)
-#     o_arranged = _arrange_qo(o)
-#     k_arranged = _arrange_kv(k)
-#     v_arranged = _arrange_kv(v)
+        return arranged
 
-#     # subs = {
-#     #     q: Tensor(shape=(2, 10, 1024, 128)),
-#     #     k: Tensor(shape=(2, 10, 1024, 128)),
-#     #     BLOCK_SIZE_M: 128,
-#     #     BLOCK_SIZE_N: 32,
-#     # }
+    q_arranged = arrange_q_or_o(q)
 
-#     # print(q_arranged.eval(subs).shape)
-#     # print(k_arranged.eval(subs).shape)
+    return q_arranged, arrange_k_or_v(k), arrange_k_or_v(v), scale, arrange_q_or_o(o)
 
-#     # # exit(0)
+def application(q, k, v, scale, o):
+    q_loaded = (q * scale * 1.44269504089).to(q.dtype)
 
-#     return q_arranged, k_arranged, v_arranged, o_arranged, sm_scale
+    acc = ntl.zeros((q.shape[-2], q.shape[-1]), dtype=ntl.float32)
+    l_i = ntl.full((q.shape[-2],), 1, dtype=ntl.float32)
+    m_i = ntl.full((q.shape[-2],), float("-inf"), dtype=ntl.float32)
+
+    for i in range(k.shape[0]):
+        qk = ntl.dot(q_loaded, ntl.trans(k[i]))
+        qk = ntl.where(k[i].offsets(-2) < k.source.shape[-2], qk, float("-inf"))
+        # causal_mask = q.offsets(-2)[:, None] > v[i].offsets(-1)[None, :]
+        # qk = ntl.where(causal_mask, qk, float("-inf"))
+        m_ij = ntl.maximum(m_i, ntl.max(qk, 1))
+        p = ntl.exp2(qk - m_ij[:, None])
+        l_ij = ntl.sum(p, 1)
+
+        alpha = ntl.exp2(m_i - m_ij)
+        acc = acc * alpha[:, None] + ntl.dot(p.to(v.dtype.dtype), v[i])
+        m_i = m_ij
+        l_i = l_i * alpha + l_ij
+
+    acc /= l_i[:, None]
+    o = acc.to(o.dtype)  # noqa: F841
+
+shape_options = (None, None, None, {"constexpr": True, "upper_bound": 128})
+q, k, v, o = (Tensor(4, jagged_dim=2, shape_options=shape_options) for _ in range(4))
+tensors = (q, k, v, Tensor(0), o)
+
+kernel = make(arrangement, application, tensors, max_num_configs=2)
+
+def _flash_attn_varlen_func(q, k, v, scale=None):
+    if scale is None:
+        scale = 1 / math.sqrt(q.shape[-1])
+
+    o = torch.nested.nested_tensor_from_jagged(
+        torch.empty_like(q.values()), q.offsets(), jagged_dim=2
+    )
+
+    kernel(q, k, v, scale, o)
+
+    return o
+
+@register_ninetoothed_op
+def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, softmax_scale=None, causal=True, **kwargs):
+    batch = cu_seqlens_q.numel() - 1
+    head_q = q.shape[1]
+    head_k = k.shape[1]
+    head_dim = q.shape[2]
+
+    num_rep = head_q // head_k
+    toekns, _, _ = k.shape
+    # t h d -> t h 1 d -> t h num_rep d -> t h*num_rep d
+    k = k.unsqueeze(2).expand((-1, -1, num_rep, -1)).reshape(toekns, -1, head_dim)
+    v = v.unsqueeze(2).expand((-1, -1, num_rep, -1)).reshape(toekns, -1, head_dim)
+
+    # T H D -> H T D
+    q = q.permute(1, 0, 2)
+    k = k.permute(1, 0, 2)
+    v = v.permute(1, 0, 2)
+
+    q = torch.nested.nested_tensor_from_jagged(
+        values=q, offsets=cu_seqlens_q, jagged_dim=2
+    )
+
+    k = torch.nested.nested_tensor_from_jagged(
+        values=k, offsets=cu_seqlens_k, jagged_dim=2
+    )
+
+    v = torch.nested.nested_tensor_from_jagged(
+        values=v, offsets=cu_seqlens_k, jagged_dim=2
+    )
+
+    o = _flash_attn_varlen_func(q, k, v, scale=softmax_scale) # (B, H, j, D)
+
+    o = o._values
+
+    # o = list(o) # (B, H, D)
+
+    # o = torch.cat(o, dim=0) # (BS, H, D)
+
+    o = o.permute((1, 0, 2))
 
 
-# def application(q, k, v, o, sm_scale):
-#     # 防止 doc string 问题所以 application 中用 ‘#’ 注释
-#     # qo: (SQ//BM,)x(BM, D)
-#     # kv: (SK//BN,)x(BN, D)
-
-#     # 九齿不支持直接声明嵌套维度的数组(NK,)x(BM, D)所以需要用一个循环
-#     for i in range(q.shape[0]):
-#         q_i = ntl.cast(q[i], ntl.float32) * sm_scale
-#         m_i = ntl.full((q_i.shape[0], ), float("-inf"), dtype=ntl.float32)
-#         l_i = ntl.zeros((q_i.shape[0], ), dtype=ntl.float32)
-#         o_i = ntl.zeros((q_i.shape[0], q_i.shape[1]), dtype=ntl.float32)
-#         for j in range(k.shape[0]):
-#             k_j = ntl.cast(k[j], ntl.float32)
-#             v_j = ntl.cast(v[j], ntl.float32)
-
-#             s_ij = ntl.dot(q_i, ntl.trans(k_j))
-#             m_ij = ntl.max(s_ij, axis=1)
-#             m_i_new = ntl.maximum(m_ij, m_i)
-#             p_ij = ntl.exp(s_ij - m_i_new[:, None])
-
-#             diff_exp = ntl.exp(m_i - m_i_new)
-#             l_ij = ntl.sum(p_ij, axis=1)
-#             l_i_new = l_i * diff_exp + l_ij
-
-#             o_i = o_i * (l_i / l_i_new * diff_exp)[:, None] + ntl.dot(p_ij, v_j) / l_i_new[:, None]
-#             m_i = m_i_new
-#             l_i = l_i_new
-#         o[i] = ntl.cast(o_i, o[i].dtype)
-
-
-# @lru_cache(1)
-# def premake():
-#     kernel = make(arrangement, application, (
-#         Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
-#         Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
-#         Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
-#         Tensor(4, shape_options=(None, None, None, {"constexpr": True})),
-#         Tensor(0),
-#         ))
-#     return kernel
-
-# def ntl_flash(q, k, v):
-#     o = torch.zeros_like(q)
-
-#     # chunk
-#     BLOCK_SIZE_M = 128
-#     BLOCK_SIZE_N = 32
-
-
-#     assert q.shape[-2] % BLOCK_SIZE_M == 0 and k.shape[-2] % BLOCK_SIZE_N == 0
-
-#     premake()(q, k, v, o, 1/math.sqrt(q.shape[-1]), BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N)
-    
-#     return o
-
+    return o
 
 
 
