@@ -20,11 +20,11 @@ class _VarLen:
         q, k, v, o, sm_scale, is_causal, BLOCK_SIZE_M=None, BLOCK_SIZE_N=None
     ):
         """
-        qo: b s hq d
-        kv: b s hk d
+        qo: b s hk num_per_group d
+        kv: b s hk 1             d
         ->
-        qo: b hq s_bm 1         | bm d
-        kv: b hq s_bm 1 | s_bn  | bn d
+        qo: b hk num_per_group s_bm         1         | bm d
+        kv: b hk num_queries_per_group s_bm 1 | s_bn  | bn d
         """
         # BLOCK_SIZE_M = ninetoothed.Symbol("BLOCK_SIZE_M", constexpr=True)
         # BLOCK_SIZE_N = ninetoothed.Symbol("BLOCK_SIZE_N", constexpr=True)
@@ -34,27 +34,25 @@ class _VarLen:
             BLOCK_SIZE_N = _VarLen.BLOCK_SIZE_N
 
         def _arrange_qo(x):
-            x_arranged = x.permute((0, 2, 1, 3)).tile(  # b s h d  # b h s d
-                (1, 1, BLOCK_SIZE_M, -1)
-            )  # b h s_bm 1 | 1 1 bm d
-            x_arranged.dtype = x_arranged.dtype.squeeze((0, 1))  # b h s_bs 1 | bs d
+            x_arranged = (
+                x # b s h g d
+                .permute((0, 2, 3, 1, 4)) # b h g s d
+                .tile((1, 1, 1, BLOCK_SIZE_M, -1)) # b h g s_bm 1 | 1 1 1 bm d
+            )
+            x_arranged.dtype = x_arranged.dtype.squeeze((0, 1, 2))
             return x_arranged
 
         def _arrange_kv(x):
             x_arranged = (
-                x.permute((0, 2, 1, 3))  # b s hk d  # b h s d
-                .tile((1, 1, BLOCK_SIZE_N, -1))  # b h s_bs 1 | 1 1 bs d
-                .tile((1, 1, -1, -1))  # b h 1 1 | 1 1 s_bs 1 | 1 1 bs d
-                .expand(
-                    (-1, -1, q_arranged.shape[2], -1)
-                )  # b h s_bm 1 | 1 1 s_bs 1 | 1 1 bs d
+                x # b s h 1 d
+                .permute((0, 2, 3, 1, 4)) # b h 1 s d
+                .tile((1, 1, 1, BLOCK_SIZE_N, -1)) # b h 1 s_bn 1 | 1 1 1 bn d
+                .expand((-1, -1, q_arranged.shape[2], q_arranged.shape[3], -1))
+                .tile((1, 1, 1, -1, -1)) # b h g 1 1 | 1 1 1 s_bn 1 | 1 1 1 bn d
+
             )
-            x_arranged.dtype = x_arranged.dtype.squeeze(
-                (0, 1, 3)
-            )  # b h s_bm 1 | s_bs | 1 1 bs d
-            x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze(
-                (0, 1)
-            )  # b h s_bm 1 | s_bs | bs d
+            x_arranged.dtype = x_arranged.dtype.squeeze((0, 1, 2, 4))
+            x_arranged.dtype.dtype = x_arranged.dtype.dtype.squeeze((0, 1, 2))
             return x_arranged
 
         q_arranged = _arrange_qo(q)
@@ -103,12 +101,12 @@ class _VarLen:
 
     @functools.lru_cache(1)
     def _premake():
-        shape_options = (None, None, None, {"constexpr": True, "upper_bound": 128})
+        shape_options = (None, None, None, None, {"constexpr": True, "upper_bound": 128})
         tensors = (
-            ninetoothed.Tensor(4, jagged_dim=1, shape_options=shape_options),
-            ninetoothed.Tensor(4, jagged_dim=1, shape_options=shape_options),
-            ninetoothed.Tensor(4, jagged_dim=1, shape_options=shape_options),
-            ninetoothed.Tensor(4, jagged_dim=1, shape_options=shape_options),
+            ninetoothed.Tensor(5, jagged_dim=1, shape_options=shape_options),
+            ninetoothed.Tensor(5, jagged_dim=1, shape_options=shape_options),
+            ninetoothed.Tensor(5, jagged_dim=1, shape_options=shape_options),
+            ninetoothed.Tensor(5, jagged_dim=1, shape_options=shape_options),
             ninetoothed.Tensor(0),
             ninetoothed.Tensor(0),
         )
@@ -116,8 +114,7 @@ class _VarLen:
             _VarLen._arrangement,
             _VarLen._application,
             tensors,
-            max_num_configs=MAX_NUM_CONFIG,
-            num_stages=MAX_NUM_STAGES,
+            max_num_configs=2,
         )
         return kernel
 
@@ -128,20 +125,15 @@ class _VarLen:
         assert (
             hq % hk == 0
         ), "Number of heads in `query` must be divisible by number of heads in `key` and `value` when GQA is enabled."
-        rep = hq // hk
-        k = (
-            k.unsqueeze(-2)  # b s h d  # b s h 1 d
-            .expand((-1, -1, -1, rep, -1))  # b s h rep d
-            .reshape(k.shape[0], k.shape[1], hq, k.shape[-1])  # b s hq d
-        )
-        v = (
-            v.unsqueeze(-2)  # b s h d  # b s h 1 d
-            .expand((-1, -1, -1, rep, -1))  # b s h rep d
-            .reshape(k.shape[0], k.shape[1], hq, k.shape[-1])  # b s hq d
-        )
+        num_queries_per_group = hq // hk
+        q = q.view(q.shape[0], q.shape[1], q.shape[2] // num_queries_per_group, num_queries_per_group, q.shape[3])
+        o = o.view(q.shape)
+        k = k.view(k.shape[0], k.shape[1], k.shape[2], 1, k.shape[3])
+        v = v.view(k.shape)
         sm_scale = 1 / math.sqrt(q.shape[-1]) if sm_scale is None else sm_scale
         _VarLen._premake()(q, k, v, o, sm_scale, is_causal)
-        return o._values
+        out_shape = o._values.shape
+        return o._values.view(out_shape[0], -1, out_shape[-1])
 
 
 @register_ninetoothed_op
